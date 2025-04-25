@@ -536,7 +536,7 @@ def random_insert_stapep_peptide(root_path, pdb_file):
 
     Args:
         root_path: 文件根路径
-        pdb_path: RFdiffusion生成的多肽骨架
+        pdb_file: RFdiffusion生成的多肽骨架的PDB文件
 
     Returns: 依次添加S5订书肽后采用Modeller生成的订书肽骨架
 
