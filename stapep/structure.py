@@ -531,23 +531,25 @@ class ChainSelect(Select):
         return chain.id == self.chain_id
 
 
-def random_insert_stapep_peptide(pdb_file):
+def random_insert_stapep_peptide(root_path, pdb_file):
     """
 
     Args:
-        pdb_file: RFdiffusion生成的多肽骨架
+        root_path: 文件根路径
+        pdb_path: RFdiffusion生成的多肽骨架
 
     Returns: 依次添加S5订书肽后采用Modeller生成的订书肽骨架
 
     """
-
+    pdb_path = os.path.join(root_path, pdb_file)
     parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_file)
+    structure = parser.get_structure("protein", pdb_path)
 
     # 获取A链数据单独保存为一个pdb文件
+    chain_A_path = os.path.join(root_path, "chain_A.pdb")
     io = PDBIO()
     io.set_structure(structure)
-    io.save("example/data/gsk3beta/1gng_5/chain_A.pdb", select=ChainSelect("A"))
+    io.save(chain_A_path, select=ChainSelect("A"))
 
     # 获取 A 链的残基数量
     chain_A = structure[0]['A']
@@ -562,13 +564,12 @@ def random_insert_stapep_peptide(pdb_file):
         peptide_sequence_copy[i+4] = 'S5'
         seq = ''.join(peptide_sequence_copy)
         st = Structure(verbose=True)
-        output_pdb_path = fr'example/data/gsk3beta/1gng_5/homology_model_{i}.pdb'
-        template_pdb_path = 'example/data/gsk3beta/1gng_5/chain_A.pdb'
+        output_pdb_path = os.path.join(root_path, fr"homology_model_{i}.pdb")
+        template_pdb_path = chain_A_path
         st.generate_3d_structure_from_template(seq=seq,
                                                output_pdb=output_pdb_path,
                                                template_pdb=template_pdb_path)
-
-        align_output_pdb_path = fr'example/data/gsk3beta/1gng_5/align/aligned_homology_model_{i}.pdb'
+        align_output_pdb_path = os.path.join(root_path, fr"align/aligned_homology_model_{i}.pdb")
         AlignStructure.align(ref_pdb=template_pdb_path, pdb=output_pdb_path, output_pdb=align_output_pdb_path)
 
 if __name__ == '__main__':
@@ -586,7 +587,10 @@ if __name__ == '__main__':
     # 4. 结构完善（Structural Completion）：使用 AmberTools 的 tleap 模块，调整三维结构，确保非标准氨基酸正确定位并被包含在模型中。
     # 5. 动力学优化（Dynamics Optimization）：使用 OpenMM 工具对模型进行分子动力学（MD）模拟。模拟短时间（如100皮秒，ps）的动力学行为，优化模型的稳定性和精确度。
 
-    random_insert_stapep_peptide('example/data/gsk3beta/1gng_5/1gng_5.pdb')
+    # ------------------Random insert S5 and Modeller ---------------------
+    root_path = 'example/data/gsk3beta/1gng_5'
+    pdb_file = '1gng_5.pdb'
+    random_insert_stapep_peptide(root_path, pdb_file)
 
     # --------------------- Modeller ---------------------
     # seq = 'Ac-BATP-R8-RRR-Aib-BLBR-R3-FKRLQ'
