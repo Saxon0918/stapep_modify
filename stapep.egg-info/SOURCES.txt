@@ -2,10 +2,15 @@ README.md
 setup.py
 stapep/__init__.py
 stapep/esmfold.py
+stapep/extract_3d_features.py
+stapep/extract_features.py
 stapep/filter.py
+stapep/filter_stapep_peptide.py
 stapep/generate_template.py
 stapep/molecular_dynamics.py
 stapep/params.py
+stapep/pdb_to_pt.py
+stapep/process_dramp.py
 stapep/run_pipeline.py
 stapep/structure.py
 stapep/utils.py

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 
-from stapep.params import amino_acid_dict, reversed_amino_acid_dict, li_dict, weight_dict, hydrophobic_dict, hydrophilic_residues
+from params import amino_acid_dict, reversed_amino_acid_dict, li_dict, weight_dict, hydrophobic_dict, hydrophilic_residues
 
 def proxy_decorator(proxy):
     def decorator(func):
@@ -65,15 +65,15 @@ class ProtParamsSeq(object):
         Calculate some params based on sequence...
 
         attributes:
-            1. seq_length: length of sequence
-            2. weight: return the weight of sequence.
-            3. hydrophobicity_index: return the hydrophobicity index of sequence.
-            4. lyticity_index: return the lytic index of sequence.
-            5. charge: return the charge of sequence.
-            6. charge_density: return the charge density of sequence.
-            7. fraction_arginine: return the fraction of arginine in sequence.
-            8. fraction_lysine: return the fraction of lysine in sequence.
-            9. isoelectric_point: return the isoelectric point of sequence.
+            1. seq_length: 肽链长度 length of sequence
+            2. weight: 肽链分子量 return the weight of sequence.
+            3. hydrophobicity_index: 疏水性指数 return the hydrophobicity index of sequence.
+            4. lyticity_index: 溶血指数 return the lytic index of sequence.
+            5. charge: 肽链总电荷 return the charge of sequence.
+            6. charge_density: 电荷密度 return the charge density of sequence.
+            7. fraction_arginine: 精氨酸占比 return the fraction of arginine in sequence.
+            8. fraction_lysine: 赖氨酸占比 return the fraction of lysine in sequence.
+            9. isoelectric_point: 等电点 return the isoelectric point of sequence.
 
         Methods:
             1. plot_lyticity_index: plot the lytic index of sequence, and return the lyticity index.
@@ -113,11 +113,11 @@ class ProtParamsSeq(object):
 
         self.seq = seq
         seqpp = SeqPreProcessing(additional_residues=additional_residues)
-        self.seq_to_list = seqpp._seq_to_list(self.seq)
-        self.weight_dict = weight_dict
-        self.li_dict = li_dict
-        self.hydrophobic_dict = hydrophobic_dict
-        self.hydrophilic_residues = hydrophilic_residues
+        self.seq_to_list = seqpp._seq_to_list(self.seq)  # 将序列拆成一个个的，例如：['Ac', 'B', 'A', 'T', 'P', 'R8']
+        self.weight_dict = weight_dict  # 每个残基的分子量
+        self.li_dict = li_dict  # 每个残基的溶血性指数
+        self.hydrophobic_dict = hydrophobic_dict  # 每个残基的疏水性指数
+        self.hydrophilic_residues = hydrophilic_residues  # 亲水性氨基酸残基的列表
 
         if additional_params is not None:
             if 'lyticity_index' in additional_params.keys():
@@ -338,8 +338,8 @@ class ProtParamsSeq(object):
         sequence = [aa for aa in self.seq_to_list if aa not in ['Ac', 'NH2']]
 
         G = nx.Graph()
-        h_dict = dict(self.li_dict)
-        nodes = [f'{s}_{step}' for step,s in enumerate(sequence) if s in self.li_dict]
+        h_dict = dict(self.li_dict)  # 溶血性指数词典
+        nodes = [f'{s}_{step}' for step,s in enumerate(sequence) if s in self.li_dict]  # 创建节点和位置索引
         labels = {f'{s}_{step}':r'$%s_{%s}$'%(s, step+1) for step, s in enumerate(sequence) if s in self.li_dict}
         
         connected_nodes = set()
@@ -347,14 +347,18 @@ class ProtParamsSeq(object):
         
         # Create edges and calculate widths
         for idx in range(len(nodes) - 3):
+            # 间隔3位的节点相连
             node1 = nodes[idx].split('_')[0]
             node2 = nodes[idx+3].split('_')[0]
+            # 如果是亲水残基，则不作为连接的节点
             if node1 in self.li_dict and node2 in self.li_dict and node1 not in self.hydrophilic_residues and node2 not in self.hydrophilic_residues:
                 G.add_edge(nodes[idx], nodes[idx+3])
-                width_list.append((h_dict[node1] + h_dict[node2]) / 5)
+                # 溶血性指数高的氨基酸会使连接更粗，表明其潜在溶血性较强。
+                width_list.append((h_dict[node1] + h_dict[node2]) / 5)  # 权重是两个节点的溶血性指数之和/5
                 connected_nodes.add(nodes[idx])
                 connected_nodes.add(nodes[idx+3])
-                
+
+            # 考虑间隔4位的节点相连
             if idx + 4 < len(nodes):
                 node3 = nodes[idx+4].split('_')[0]
                 if node1 in self.li_dict and node3 in self.li_dict and node1 not in self.hydrophilic_residues and node3 not in self.hydrophilic_residues:
@@ -364,7 +368,7 @@ class ProtParamsSeq(object):
                     connected_nodes.add(nodes[idx+4])
         
         # Only add nodes that have connections
-        G = G.subgraph(connected_nodes)
+        G = G.subgraph(connected_nodes)  # 仅保留连接的子图，删除孤立节点
         
         position = nx.spring_layout(G)
         fig, ax = plt.subplots(1, 1, figsize=(20, 12))
@@ -377,7 +381,7 @@ class ProtParamsSeq(object):
         nx.draw_networkx_edges(G, position, edge_color='orangered', alpha=1, ax=ax, width=width_list)
         nx.draw_networkx_labels(G, position, {node: labels[node] for node in G.nodes()}, font_size=16, ax=ax)
         
-        li = sum(width_list) * 5
+        li = sum(width_list) * 5  # 溶血性指数是所有边宽的总和乘以 5。
         # li = self.lyticity_index
         plt.text(0.1, 1.0, 'Lyticity index: ' + '%.2f' % li, fontsize=20, ha='center', va='center', transform=ax.transAxes)
         plt.savefig(f'{output_path}', format='SVG')
@@ -662,8 +666,8 @@ class PhysicochemicalPredictor(MDAnalysisHandler):
                  start_frame: int=500,
                  reimage: bool=False) -> None:
         super(PhysicochemicalPredictor, self).__init__(topology_file, trajectory_file, start_frame, reimage)
-        self.sequence = sequence
-        self.trajectory = self.get_trajectory()
+        self.sequence = sequence  # 肽链序列
+        self.trajectory = self.get_trajectory()  # 原子坐标数据
     
     def _save_mean_structure(self, output_file: str) -> str:
         '''
@@ -672,9 +676,9 @@ class PhysicochemicalPredictor(MDAnalysisHandler):
                   The minimum RMSD structure is the structure that is most similar to all the other structures in the trajectory, 
                   but it may not be representative of the entire trajectory.
         '''
-        avg = pt.mean_structure(self.trajectory)
-        rmsd_list = pt.rmsd(self.trajectory, ref=avg, mask='@CA')
-        frame = self.trajectory[np.argmin(rmsd_list)]
+        avg = pt.mean_structure(self.trajectory)  # 计算轨迹self.trajectory的平均结构
+        rmsd_list = pt.rmsd(self.trajectory, ref=avg, mask='@CA')  # 计算10000帧中每一帧与平均结构之间的 RMSD（均方根偏差）
+        frame = self.trajectory[np.argmin(rmsd_list)]  # 找到RMSD列表中最小值的索引
         coord = frame.to_ndarray()
         coord = np.expand_dims(coord, axis=0)
         traj = pt.Trajectory(xyz=coord, top=self.trajectory.topology)
@@ -707,7 +711,7 @@ class PhysicochemicalPredictor(MDAnalysisHandler):
 
         p = PDBParser()
         structure = p.get_structure('PEPT', input_file)
-        dssp = DSSP(structure[0], input_file)
+        dssp = DSSP(structure[0], input_file, dssp='/data/zxd/miniconda3/envs/stap/bin/mkdssp')
         a_keys = list(dssp.keys())
         asa_list = []
         

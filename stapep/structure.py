@@ -16,7 +16,8 @@ from Bio import pairwise2
 import Bio.Align.substitution_matrices as matlist
 from collections import defaultdict
 from io import StringIO
-
+from read_fa import *
+from calculate_alpha import *
 try:
     from Bio.Data.PDBData import protein_letters_3to1 as aa3to1
 except ImportError:
@@ -348,6 +349,50 @@ class AlignStructure(object):
     #         print(e)
 
     @staticmethod
+    def align_denovo(ref_pdb: str, pdb: str, output_pdb: str, rfdiffusion_template:str):
+        '''
+            Align structures using BioPython.
+
+            Args:
+                ref_pdb (str): The path to the reference PDB file.
+                pdb (str): The path to the PDB file to align.
+                output_pdb (str): The path to save the output PDB file.
+
+            Returns:
+                str: The path to the generated PDB file.
+        '''
+
+        try:
+            import pymol
+            from pymol import cmd
+            cmd.reinitialize()
+        except Exception as e:
+            raise ImportError('Please install PyMOL to use this method. mamba install -c conda-forge pymol-open-source')
+
+        # Load the PDB files
+        pymol.cmd.load(ref_pdb, 'ref')  # 加载模板文件
+        pymol.cmd.load(pdb, 'denovo')  # 加载预测pdb文件
+
+        # Perform alignment on alpha carbons (CA atoms)
+        # for 1gng chain X; for 2gv2 chain B
+        if rfdiffusion_template.startswith("1gng"):
+            out = pymol.cmd.align('denovo', 'ref and chain A')  # 基于α-碳原子（CA 原子）进行对齐
+        elif rfdiffusion_template.startswith("2gv2"):
+            out = pymol.cmd.align('denovo and name CA', 'ref and chain A and name CA')  # 基于α-碳原子（CA 原子）进行对齐
+        else:
+            print("error aligning denovo and denovo")
+        # RMSD、对齐原子数量、迭代次数、对齐前RMSD、对齐前对齐的原子数量、对齐评分、对齐涉及的氨基酸残基数量
+        rmsd, n_atoms, n_cycles, n_rmsd_pre, n_atom_pre, score, n_res = out
+
+        # Make sure to update coordinates of the denovo structure
+        pymol.cmd.alter_state(1, 'denovo', 'x, y, z = x, y, z')  # 确保目标结构denovo中的坐标在对齐后得到更新
+        # Apply the transformation matrix after alignment
+        pymol.cmd.matrix_copy('denovo', 'ref')  # 确保目标结构与参考结构完全对齐
+        # Save the aligned denovo structure to a new PDB file
+        pymol.cmd.save(output_pdb, 'denovo')  # 保存新的目标结构
+        return rmsd  # 返回RMSD
+
+    @staticmethod
     def rmsd(ref_pdb: str, pdb: str):
         try:
             import pymol
@@ -531,7 +576,7 @@ class ChainSelect(Select):
         return chain.id == self.chain_id
 
 
-def random_insert_stapep_peptide(root_path, pdb_file):
+def random_insert_stapep_peptide(root_path, pdb_path):
     """
 
     Args:
@@ -541,7 +586,6 @@ def random_insert_stapep_peptide(root_path, pdb_file):
     Returns: 依次添加S5订书肽后采用Modeller生成的订书肽骨架
 
     """
-    pdb_path = os.path.join(root_path, pdb_file)
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure("protein", pdb_path)
 
@@ -558,18 +602,24 @@ def random_insert_stapep_peptide(root_path, pdb_file):
     peptide_sequence = list('G' * residue_count)
 
     # 向RFDiffusion中依次添加S5订书肽，然后采用Modeller肽链
-    for i in range(residue_count - 4):
+    for i in range(1, residue_count - 5):
         peptide_sequence_copy = peptide_sequence.copy()
         peptide_sequence_copy[i] = 'S5'
         peptide_sequence_copy[i+4] = 'S5'
         seq = ''.join(peptide_sequence_copy)
         st = Structure(verbose=True)
-        output_pdb_path = os.path.join(root_path, fr"homology_model_{i}.pdb")
+        noalign_root_path = os.path.join(root_path, "noalign")
+        if not os.path.exists(noalign_root_path):
+            os.makedirs(noalign_root_path)
+        output_pdb_path = os.path.join(noalign_root_path, fr"homology_model_{i}.pdb")
         template_pdb_path = chain_A_path
         st.generate_3d_structure_from_template(seq=seq,
                                                output_pdb=output_pdb_path,
                                                template_pdb=template_pdb_path)
-        align_output_pdb_path = os.path.join(root_path, fr"align/aligned_homology_model_{i}.pdb")
+        align_root_path = os.path.join(root_path, "align")
+        if not os.path.exists(align_root_path):
+            os.makedirs(align_root_path)
+        align_output_pdb_path = os.path.join(align_root_path, fr"aligned_homology_model_{i}.pdb")
         AlignStructure.align(ref_pdb=template_pdb_path, pdb=output_pdb_path, output_pdb=align_output_pdb_path)
 
 if __name__ == '__main__':
@@ -587,10 +637,73 @@ if __name__ == '__main__':
     # 4. 结构完善（Structural Completion）：使用 AmberTools 的 tleap 模块，调整三维结构，确保非标准氨基酸正确定位并被包含在模型中。
     # 5. 动力学优化（Dynamics Optimization）：使用 OpenMM 工具对模型进行分子动力学（MD）模拟。模拟短时间（如100皮秒，ps）的动力学行为，优化模型的稳定性和精确度。
 
-    # ------------------Random insert S5 and Modeller ---------------------
-    root_path = 'example/data/gsk3beta/1gng_5'
-    pdb_file = '1gng_5.pdb'
-    random_insert_stapep_peptide(root_path, pdb_file)
+    method = 'denovo'
+    root_folder = 'MDM2_500_4'
+    for i in range(500):
+        rfdiffusion_template = f'2gv2_{i}'
+        root_path = f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}'
+        if method == 'modeller':
+            # ------------------Random insert S5 and Modeller ---------------------
+            if not os.path.exists(root_path):
+                os.makedirs(root_path)
+            pdb_path = rf'/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb'
+            random_insert_stapep_peptide(root_path, pdb_path)
+        elif method == 'denovo':
+            # ------------------ Denovo generate structure ---------------------
+            if rfdiffusion_template.startswith("1gng"):
+                same_threshold = 4  # for 1gng the threshold=4
+                res_threshold = 14  # for 1gng the threshold=14
+            elif rfdiffusion_template.startswith("2gv2"):
+                same_threshold = 3  # for 2gv2 the threshold=3
+                res_threshold = 6  # for 2gv2 the threshold=6
+            else:
+                print("error file folder")
+                break
+            fa_file_path = os.path.join(root_path, 'fa')
+            de_novo_folder_path = os.path.join(root_path, 'denovo')
+            if not os.path.exists(de_novo_folder_path):
+                os.makedirs(de_novo_folder_path)
+
+            folder_name, index_list, seq_list = parse_fa_files(fa_file_path, same_threshold, res_threshold, rfdiffusion_template)
+            for i in range(len(seq_list)):
+                seq = seq_list[i]
+                index = index_list[i]
+                st = Structure(verbose=True, save_tmp_dir=True)  # 溶剂类别、是否保存临时目录、是否采用详细日志
+                de_novo_path = f"{de_novo_folder_path}/{index}.pdb"
+                output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
+                if not output_de_novo:
+                    record = f"Iteration {385} - error"
+                    print(record)
+
+            filenames = sorted(f for f in os.listdir(de_novo_folder_path) if f.endswith(".pdb"))
+
+            if rfdiffusion_template.startswith("1gng"):
+                align_filenames = []
+                for filename in filenames:
+                    ligand_path = os.path.join(de_novo_folder_path, filename)
+                    helix_ratio = calculate_alpha(ligand_path)
+                    if helix_ratio > 0.3:
+                        align_filenames.append(filename)
+            align_filenames = [fname for fname in os.listdir(f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/denovo') if fname.lower().endswith('.pdb')]  # todo test
+
+            if rfdiffusion_template.startswith("1gng"):
+                # protein_path = "/home/d3008/Documents/zhr/gsk3beta_new/1gng.pdb"
+                protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
+            elif rfdiffusion_template.startswith("2gv2"):
+                # protein_path = "/home/d3008/Documents/zhr/MDM2/2gv2.pdb"
+                protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
+            else:
+                print("error file folder")
+            align_denovo_path = os.path.join(root_path, "align_denovo")
+            if not os.path.exists(align_denovo_path):
+                os.makedirs(align_denovo_path)
+            for ligand_name in align_filenames:
+                ligand_path = os.path.join(de_novo_folder_path, ligand_name)
+                ligand_name = os.path.splitext(os.path.basename(ligand_name))[0]
+                align_output_pdb_path = os.path.join(align_denovo_path, f"{ligand_name}.pdb")
+                AlignStructure.align_denovo(ref_pdb=protein_path, pdb=ligand_path, output_pdb=align_output_pdb_path, rfdiffusion_template=rfdiffusion_template)
+        else:
+            print(1)
 
     # --------------------- Modeller ---------------------
     # seq = 'Ac-BATP-R8-RRR-Aib-BLBR-R3-FKRLQ'

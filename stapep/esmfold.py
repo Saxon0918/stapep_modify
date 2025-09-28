@@ -5,8 +5,8 @@ import gc
 
 def predict_pdb(seq, device="cpu"):
 # def predict_pdb(seq, device="cuda"):
-    tokenizer = AutoTokenizer.from_pretrained("/data/zhr/pycharmprojects/stapep/facebook/esmfold_v1")
-    model = EsmForProteinFolding.from_pretrained("/data/zhr/pycharmprojects/stapep/facebook/esmfold_v1", low_cpu_mem_usage=True)
+    tokenizer = AutoTokenizer.from_pretrained("/home/d3008/Documents/zhr/pycharmprojects/stapep_modify/facebook/esmfold_v1")
+    model = EsmForProteinFolding.from_pretrained("/home/d3008/Documents/zhr/pycharmprojects/stapep_modify/facebook/esmfold_v1", low_cpu_mem_usage=True)
     device = torch.device(device)
     model.esm = model.esm.float()
     model = model.to(device)

@@ -50,7 +50,7 @@ def physicochemical(args):
         'mean_bfactor': pcp.calc_mean_bfactor(),
         'mean_molsurf': pcp.calc_mean_molsurf(),
         'mean_gyrate': pcp.calc_mean_gyrate(),
-        'hydrophobic_index': pcp.calc_hydrophobic_index(os.path.join(args.output, mean_structure)),
+        # 'hydrophobic_index': pcp.calc_hydrophobic_index(os.path.join(args.output, mean_structure)),
         'psa': pcp.calc_psa(os.path.join(args.output, mean_structure)),
         'num_hbonds': pcp.calc_n_hbonds(),
         'helix_percent': pcp.calc_helix_percent(),
@@ -98,8 +98,8 @@ def main(args):
 
 def get_args():
     parser = argparse.ArgumentParser(description='Run molecular dynamics simulation and extract features...')
-    parser.add_argument('--seq', type=str, required=True, help='Sequence of the protein')
-    parser.add_argument('--output', type=str, required=True, help='Output directory')
+    parser.add_argument('--seq', type=str, default='Ac-BATP-R8-RRR-Aib-BLBR-R3-FKRLQ', help='Sequence of the protein')
+    parser.add_argument('--output', type=str, default='example/data', help='Output directory')
     parser.add_argument('--type', type=str, default='implicit', help='Type of simulation')
     parser.add_argument('--solvent', type=str, default='water', help='Solvent')
     parser.add_argument('--temperature', type=float, default=300, help='Temperature (K)')
