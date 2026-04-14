@@ -377,10 +377,8 @@ class AlignStructure(object):
         # for 1gng chain X; for 2gv2 chain B
         if rfdiffusion_template.startswith("1gng"):
             out = pymol.cmd.align('denovo', 'ref and chain A')  # 基于α-碳原子（CA 原子）进行对齐
-        elif rfdiffusion_template.startswith("2gv2"):
-            out = pymol.cmd.align('denovo and name CA', 'ref and chain A and name CA')  # 基于α-碳原子（CA 原子）进行对齐
         else:
-            print("error aligning denovo and denovo")
+            out = pymol.cmd.align('denovo and name CA', 'ref and chain A and name CA')  # 基于α-碳原子（CA 原子）进行对齐
         # RMSD、对齐原子数量、迭代次数、对齐前RMSD、对齐前对齐的原子数量、对齐评分、对齐涉及的氨基酸残基数量
         rmsd, n_atoms, n_cycles, n_rmsd_pre, n_atom_pre, score, n_res = out
 
@@ -638,9 +636,9 @@ if __name__ == '__main__':
     # 5. 动力学优化（Dynamics Optimization）：使用 OpenMM 工具对模型进行分子动力学（MD）模拟。模拟短时间（如100皮秒，ps）的动力学行为，优化模型的稳定性和精确度。
 
     method = 'denovo'
-    root_folder = 'MDM2_500_4'
-    for i in range(500):
-        rfdiffusion_template = f'2gv2_{i}'
+    root_folder = 'IPAD/IPAD_100_1'
+    for i in range(13, 100):
+        rfdiffusion_template = f'ipad_{i}'
         root_path = f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}'
         if method == 'modeller':
             # ------------------Random insert S5 and Modeller ---------------------
@@ -653,12 +651,10 @@ if __name__ == '__main__':
             if rfdiffusion_template.startswith("1gng"):
                 same_threshold = 4  # for 1gng the threshold=4
                 res_threshold = 14  # for 1gng the threshold=14
-            elif rfdiffusion_template.startswith("2gv2"):
-                same_threshold = 3  # for 2gv2 the threshold=3
-                res_threshold = 6  # for 2gv2 the threshold=6
             else:
-                print("error file folder")
-                break
+                same_threshold = 4  # for 2gv2 the threshold=3
+                res_threshold = 6  # for 2gv2 the threshold=6
+
             fa_file_path = os.path.join(root_path, 'fa')
             de_novo_folder_path = os.path.join(root_path, 'denovo')
             if not os.path.exists(de_novo_folder_path):
@@ -670,30 +666,25 @@ if __name__ == '__main__':
                 index = index_list[i]
                 st = Structure(verbose=True, save_tmp_dir=True)  # 溶剂类别、是否保存临时目录、是否采用详细日志
                 de_novo_path = f"{de_novo_folder_path}/{index}.pdb"
+                if os.path.exists(de_novo_path):
+                    print(f"skip existing file: {de_novo_path}")
+                    continue
                 output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
                 if not output_de_novo:
                     record = f"Iteration {385} - error"
                     print(record)
 
             filenames = sorted(f for f in os.listdir(de_novo_folder_path) if f.endswith(".pdb"))
-
-            if rfdiffusion_template.startswith("1gng"):
+            if rfdiffusion_template.startswith("1gng") or rfdiffusion_template.startswith("ipad"):
                 align_filenames = []
                 for filename in filenames:
                     ligand_path = os.path.join(de_novo_folder_path, filename)
                     helix_ratio = calculate_alpha(ligand_path)
                     if helix_ratio > 0.3:
                         align_filenames.append(filename)
-            align_filenames = [fname for fname in os.listdir(f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/denovo') if fname.lower().endswith('.pdb')]  # todo test
-
-            if rfdiffusion_template.startswith("1gng"):
-                # protein_path = "/home/d3008/Documents/zhr/gsk3beta_new/1gng.pdb"
-                protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
-            elif rfdiffusion_template.startswith("2gv2"):
-                # protein_path = "/home/d3008/Documents/zhr/MDM2/2gv2.pdb"
-                protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
             else:
-                print("error file folder")
+                align_filenames = [fname for fname in os.listdir(f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/denovo') if fname.lower().endswith('.pdb')]
+            protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
             align_denovo_path = os.path.join(root_path, "align_denovo")
             if not os.path.exists(align_denovo_path):
                 os.makedirs(align_denovo_path)
