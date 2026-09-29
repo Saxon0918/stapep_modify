@@ -1,37 +1,28 @@
 import os
+import sys
 import uuid
 import shutil
 import logging
-import csv
-import gc
-import torch
-import numpy as np
-from openmm import OpenMMException, unit
-from openmm.app import PDBFile
-import pandas as pd
-from Bio import AlignIO
-from Bio.PDB import PDBParser, Superimposer, PDBIO, Select
-from Bio.PDB.PDBIO import PDBIO
-from Bio.PDB.Polypeptide import is_aa
-from Bio import pairwise2
-# from Bio.SubsMat import MatrixInfo as matlist
-import Bio.Align.substitution_matrices as matlist
-from collections import defaultdict
-from io import StringIO
+from pathlib import Path
+
+# 支持 `python stapep/structure.py` 直接运行时导入 stapep 包
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from parmed.exceptions import OpenMMError
 
-from read_fa import *
-from calculate_alpha import *
+from stapep.molecular_dynamics import PrepareProt, Simulation
+from stapep.utils import PhysicochemicalPredictor, SeqPreProcessing
+
 try:
     from Bio.Data.PDBData import protein_letters_3to1 as aa3to1
 except ImportError:
     print('Warning: Bio.Data.PDBData is deprecated, please use Bio.Data.SCOPData instead')
     from Bio.Data.SCOPData import protein_letters_3to1 as aa3to1
 
-from stapep.molecular_dynamics import PrepareProt, Simulation
-from stapep.utils import PhysicochemicalPredictor, SeqPreProcessing
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+from Bio.PDB import PDBParser
+from Bio.PDB.Polypeptide import is_aa
+
 
 class Structure(object):
     """
@@ -256,9 +247,9 @@ class Structure(object):
 class AlignStructure(object):
 
     @staticmethod
-    def convert_pdb_to_seq(id: str, pdb_file: str) -> list[str]:
+    def convert_pdb_to_seq(id: str, pdb_file: str) -> str:
         '''
-            Convert a pdb file to a fasta file.
+            Convert a pdb file to a sequence string.
         '''
         res_list = AlignStructure._get_pdb_sequence(id, pdb_file)
         seq = [res[1] for res in res_list]
@@ -266,7 +257,7 @@ class AlignStructure(object):
         return seq
 
     @staticmethod
-    def _get_pdb_sequence(id, pdb_file) -> list[tuple]:
+    def _get_pdb_sequence(id, pdb_file) -> list:
         '''
             Return a list of tuples (idx, sequence).
             eg:[(6, 'P'),
@@ -282,7 +273,7 @@ class AlignStructure(object):
     @staticmethod
     def align(ref_pdb: str, pdb: str, output_pdb: str):
         '''
-            Align structures using BioPython.
+            Align structures using PyMOL.
 
             Args:
                 ref_pdb (str): The path to the reference PDB file.
@@ -290,7 +281,7 @@ class AlignStructure(object):
                 output_pdb (str): The path to save the output PDB file.
 
             Returns:
-                str: The path to the generated PDB file.
+                float: The RMSD of the alignment.
         '''
 
         try:
@@ -317,83 +308,20 @@ class AlignStructure(object):
         pymol.cmd.save(output_pdb, 'denovo')  # 保存新的目标结构
         return rmsd  # 返回RMSD
 
-    # @staticmethod
-    # def align(ref_pdb: str, pdb: str, output_pdb: str):
-    #     '''
-    #         Align structures using BioPython.
-
-    #         Args:
-    #             ref_pdb (str): The path to the reference PDB file.
-    #             pdb (str): The path to the PDB file to align.
-    #             output_pdb (str): The path to save the output PDB file.
-
-    #         Returns:
-    #             str: The path to the generated PDB file.
-    #     '''
-
-    #     ref_id = os.path.basename(ref_pdb).split('.')[0]
-    #     pdb_id = os.path.basename(pdb).split('.')[0]
-
-    #     parser = PDBParser()
-    #     ref_structure = parser.get_structure(ref_id, ref_pdb)
-    #     pdb_structure = parser.get_structure(pdb_id, pdb)
-    #     ref_model = list(ref_structure.get_models())[0]
-    #     pdb_model = list(pdb_structure.get_models())[0]
-
-    #     resseq_A = AlignStructure._get_pdb_sequence(ref_id, ref_pdb)
-    #     resseq_B = AlignStructure._get_pdb_sequence(pdb_id, pdb)
-    #     sequence_A = AlignStructure.convert_pdb_to_seq(ref_id, ref_pdb)
-    #     sequence_B = AlignStructure.convert_pdb_to_seq(pdb_id, pdb)
-
-    #     alns = pairwise2.align.globalds(sequence_A, sequence_B, matlist.load("BLOSUM62"), -10.0, -0.5,
-    #                                         penalize_end_gaps=(False, False) )
-    #     best_aln = alns[0]
-    #     aligned_A, aligned_B, score, begin, end = best_aln
-    #     mapping = {}
-    #     aa_i_A, aa_i_B = 0, 0
-    #     for aa_aln_A, aa_aln_B in zip(aligned_A, aligned_B):
-    #         if aa_aln_A == '-':
-    #             if aa_aln_B != '-':
-    #                 aa_i_B += 1
-    #         elif aa_aln_B == '-':
-    #             if aa_aln_A != '-':
-    #                 aa_i_A += 1
-    #         else:
-    #             assert resseq_A[aa_i_A][1] == aa_aln_A
-    #             assert resseq_B[aa_i_B][1] == aa_aln_B
-    #             mapping[resseq_A[aa_i_A][0]] = resseq_B[aa_i_B][0]
-    #             aa_i_A += 1
-    #             aa_i_B += 1
-
-    #     # Extract CA atoms using the helper function
-    #     refe_ca_list = AlignStructure.get_CA_atoms_from_model(ref_model, list(mapping.keys()))
-    #     mobi_ca_list = AlignStructure.get_CA_atoms_from_model(pdb_model, list(mapping.values()))
-
-    #     # Superimpose matching residues
-    #     try:
-    #         si = Superimposer()
-    #         si.set_atoms(refe_ca_list, mobi_ca_list)
-    #         si.apply(pdb_structure.get_atoms())
-
-    #         io = PDBIO()
-    #         io.set_structure(pdb_structure)
-    #         io.save(output_pdb)
-    #         return output_pdb
-    #     except Exception as e:
-    #         print(e)
-
     @staticmethod
-    def align_denovo(ref_pdb: str, pdb: str, output_pdb: str, rfdiffusion_template:str):
+    def align_denovo(ref_pdb: str, pdb: str, output_pdb: str, rfdiffusion_template: str):
         '''
-            Align structures using BioPython.
+            Align structures using PyMOL.
 
             Args:
                 ref_pdb (str): The path to the reference PDB file.
                 pdb (str): The path to the PDB file to align.
                 output_pdb (str): The path to save the output PDB file.
+                rfdiffusion_template (str): The RFdiffusion template name,
+                    used to decide which chain of the reference to align to.
 
             Returns:
-                str: The path to the generated PDB file.
+                float: The RMSD of the alignment.
         '''
 
         try:
@@ -463,270 +391,9 @@ class AlignStructure(object):
         return ca_atoms
 
 
-def calculate_all_kinds_stapep(seq, st):
-    stapep_ways = ['S5_S5_3', 'R8_S5_6', 'R5_S8_6', 'R5_S5_2', 'S5_S5_4', 'R8_S5_5', 'R8_S5_3', 'S5_R8_6', 'R5_S8_7']
-    columns = [
-        "Iteration", "seq", "helix percent", "sheet percent", "loop percent",
-        "mean bfactor", "mol surf", "mean gyrate", "psa",
-        "total number of hydrogen bonds", "smiles"
-    ]
-    file_path = 'example/insulin/insulin.txt'
-    if not os.path.exists(file_path):
-        with open(file_path, 'w') as file:
-            file.write('\t'.join(columns) + '\n')  # 写入列名
-
-    # 使用 for 循环遍历 seq，生成每一轮的 new_seq
-    for stapep_way in stapep_ways:
-        stapep_first, stapep_second, interval = stapep_way.split('_')
-        interval = int(interval)
-
-        for i in range(0, len(seq)):
-            new_seq = seq[:i]
-            # 插入stapep_first和stapep_second后，跳过interval个字符
-            if i == 0:
-                new_seq = new_seq + stapep_first + '-' + seq[i:i + interval]
-            else:
-                new_seq = new_seq + '-' + stapep_first + '-' + seq[i:i + interval]
-
-            back_i = i + interval
-            if back_i < len(seq):  # 确保不会越界
-                new_seq = new_seq + '-' + stapep_second + '-' + seq[back_i:]
-            elif back_i == len(seq):
-                new_seq = new_seq + '-' + stapep_second
-            else:
-                break
-
-            # 同源建模，通过相似蛋白质序列的结构预测三维结构
-            # st.generate_3d_structure_from_template(seq=seq, output_pdb='example/data/homology_model_test0.pdb',
-            #                                        template_pdb='example/data/template.pdb')
-            # 将预测出的pdb中的C原子与模板中对齐，三维坐标对齐
-            # AlignStructure.align(ref_pdb='example/data/template.pdb', pdb='example/data/homology_model.pdb',
-            #                      output_pdb='example/data/aligned.pdb')
-            #
-            # # 采用AmberTools工具建模
-            # st.generate_3d_structure_from_sequence(seq=seq, output_pdb='example/data/sequence.pdb')
-
-            # 去模板预测，采用ESMFold
-            de_novo_path = f"example/insulin/denovo_{stapep_first}_{stapep_second}_{interval}_{i}.pdb"
-            output_de_novo = st.de_novo_3d_structure(seq=new_seq, output_pdb=de_novo_path)
-            if not output_de_novo:
-                record = f"Iteration {stapep_first}_{stapep_second}_{interval}_{i} - error"
-                # 追加记录到文件
-                with open(file_path, 'a') as file:  # 使用追加模式
-                    file.write(record + '\n')
-                continue
-            pathname = st.tmp_dir  # The path where the topology file and trajectory file are located
-            # pathname = '/tmp/9fbdc077-e700-4bb2-a959-9bd3f8ab8192'
-            pcp = PhysicochemicalPredictor(sequence=new_seq,
-                                           topology_file=os.path.join(pathname, 'pep_vac.prmtop'),
-                                           # topology file　(default: pep_vac.prmtop in the data folder)
-                                           trajectory_file=os.path.join(pathname, 'traj.dcd'),
-                                           # trajectory file (default: traj.dcd in the data folder)
-                                           start_frame=0)  # start frame (default: 500)
-
-            # Get the features
-            helix_percent = pcp.calc_helix_percent()
-            sheet_percent = pcp.calc_extend_percent()
-            loop_percent = pcp.calc_loop_percent()
-
-            print('helix percent: ', helix_percent)  # 计算α螺旋占比
-            print('sheet percent: ', sheet_percent)  # 计算β折叠占比
-            print('loop percent: ', loop_percent)  # 计算环结构（loop）占比
-            # save the mean structure of the trajectory
-            mean_structure_path = f"example/insulin/mean_structure_{stapep_first}_{stapep_second}_{interval}_{i}.pdb"
-            pcp._save_mean_structure(mean_structure_path)  # 保存分子的平均结构的pdb
-
-            # calculate the Mean B-factor, Molecular Surface, Mean Gyration Radius, Hydrophobic Index, and 3D-PSA
-            mean_bfactor = pcp.calc_mean_bfactor()
-            mol_surf = pcp.calc_mean_molsurf()
-            mean_gyrate = pcp.calc_mean_gyrate()
-            psa = pcp.calc_psa(mean_structure_path)
-            total_number_hydrogen_bonds = pcp.calc_n_hbonds()
-            print('mean bfactor: ', mean_bfactor)  # 平均B因子，较低的B因子表明原子较稳定，柔性较小
-            print('mol surf: ', mol_surf)  # 分子表面积
-            print('mean gyrate: ', mean_gyrate)  # 分子的旋转半径，分子质量分布的中心到外部的平均距离，评估分子的形状和紧密性
-            # print('hydrophobic index: ',
-            #       pcp.calc_hydrophobic_index(os.path.join(pathname, 'mean_structure.pdb')))  # TODO 疏水指数环境没配好
-            print('psa: ', psa)  # 极性表面积，评价分子吸收、渗透和跨膜运输能力
-            print('total number of hydrogen bonds: ', total_number_hydrogen_bonds)  # 氢键的总数，决定了分子的稳定性和结合能力
-
-            # extract 2D structure of the peptide
-            smiles = pcp.extract_2d_structure(mean_structure_path)
-            print(smiles)
-            # 构建记录内容
-            record = f"{stapep_first}_{stapep_second}_{interval}_{i}\t{new_seq}\t{helix_percent}\t{sheet_percent}\t{loop_percent}\t" \
-                     f"{mean_bfactor}\t{mol_surf}\t{mean_gyrate}\t{psa}\t" \
-                     f"{total_number_hydrogen_bonds}\t{smiles}"
-
-            # 追加记录到文件
-            with open(file_path, 'a') as file:  # 使用追加模式
-                file.write(record + '\n')
-
-def generate_pdb(st):
-    """
-
-    Args:
-        st: 传入的Structure(verbose=True)样本
-
-    Returns: 采用PDB数据集中2176条数据的Sequence生成的订书肽PDB文件
-
-    """
-
-    # file_path = 'example/datasets/Filtered_peptides.csv'
-    # file_path = 'example/datasets/filter_stapep_amp.csv'
-    file_path = 'example/datasets/0001-3906_sup.csv'
-    sequence_column = []
-    index_column = []
-
-    with open(file_path, mode='r', encoding='utf-8') as file:
-        csv_reader = csv.reader(file)
-        headers = next(csv_reader)
-        sequence_index = headers.index('seq')
-        stapep_id = headers.index('stapep_id')
-        for row in csv_reader:
-            sequence_column.append(row[sequence_index])
-            index_column.append(row[stapep_id])
-
-    # for i in range(4, len(sequence_column)):
-    for i in range(101, 19993):
-        seq = sequence_column[i]
-        torch.cuda.empty_cache()
-        gc.collect()
-        de_novo_path = f"example/stapep_data/pdb_sup/stapep_{index_column[i]}.pdb"
-        output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
-        if not output_de_novo:
-            record = f"Iteration {i} - error"
-            print(record)
-    print("FINISH")
-
-
-class ChainSelect(Select):
-    def __init__(self, chain_id):
-        self.chain_id = chain_id
-
-    def accept_chain(self, chain):
-        return chain.id == self.chain_id
-
-
-def random_insert_stapep_peptide(root_path, pdb_path):
-    """
-
-    Args:
-        root_path: 文件根路径
-        pdb_file: RFdiffusion生成的多肽骨架的PDB文件
-
-    Returns: 依次添加S5订书肽后采用Modeller生成的订书肽骨架
-
-    """
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("protein", pdb_path)
-
-    # 获取A链数据单独保存为一个pdb文件
-    chain_A_path = os.path.join(root_path, "chain_A.pdb")
-    io = PDBIO()
-    io.set_structure(structure)
-    io.save(chain_A_path, select=ChainSelect("A"))
-
-    # 获取 A 链的残基数量
-    chain_A = structure[0]['A']
-    residues = [res for res in chain_A if res.id[0] == ' ']
-    residue_count = len(residues)
-    peptide_sequence = list('G' * residue_count)
-
-    # 向RFDiffusion中依次添加S5订书肽，然后采用Modeller肽链
-    for i in range(1, residue_count - 5):
-        peptide_sequence_copy = peptide_sequence.copy()
-        peptide_sequence_copy[i] = 'S5'
-        peptide_sequence_copy[i+4] = 'S5'
-        seq = ''.join(peptide_sequence_copy)
-        st = Structure(verbose=True)
-        noalign_root_path = os.path.join(root_path, "noalign")
-        if not os.path.exists(noalign_root_path):
-            os.makedirs(noalign_root_path)
-        output_pdb_path = os.path.join(noalign_root_path, fr"homology_model_{i}.pdb")
-        template_pdb_path = chain_A_path
-        st.generate_3d_structure_from_template(seq=seq,
-                                               output_pdb=output_pdb_path,
-                                               template_pdb=template_pdb_path)
-        align_root_path = os.path.join(root_path, "align")
-        if not os.path.exists(align_root_path):
-            os.makedirs(align_root_path)
-        align_output_pdb_path = os.path.join(align_root_path, fr"aligned_homology_model_{i}.pdb")
-        AlignStructure.align(ref_pdb=template_pdb_path, pdb=output_pdb_path, output_pdb=align_output_pdb_path)
-
 if __name__ == '__main__':
-    # 1. 初始转换（Initial Conversion）
-    # 目标：将非标准氨基酸转换为 ALA（丙氨酸），简化建模初期的处理。
-    # 原因：非标准氨基酸可能缺乏标准的三维结构模板，因此暂时用ALA替代，有助于初步建模。
-    #
-    # 2. 肽链结构建模（Peptide Structure Modeling）
-    # 包含三种方法：
-    # （1）同源建模（Homology Modeling）：使用 Modeller 工具。假设相似序列具有类似的三维结构，选择已知结构作为模板，通过比对序列生成目标肽链的模型。
-    # （2）去模板预测（De Novo Prediction）：使用 ESMFold，根据肽链序列直接预测三维结构，不依赖模板。
-    # （3）AmberTools：使用其 tleap 模块从肽链序列生成初步三维结构。但是准确性相对较低，这种方法通常不被推荐。
-    #
-    # 3. 氨基酸重转换（Reconversion of Amino Acids）：在建模完成后，将所有临时替换为ALA的非标准氨基酸恢复到其原始命名。
-    # 4. 结构完善（Structural Completion）：使用 AmberTools 的 tleap 模块，调整三维结构，确保非标准氨基酸正确定位并被包含在模型中。
-    # 5. 动力学优化（Dynamics Optimization）：使用 OpenMM 工具对模型进行分子动力学（MD）模拟。模拟短时间（如100皮秒，ps）的动力学行为，优化模型的稳定性和精确度。
+    # 保持旧入口兼容：原 structure.py 的 __main__（RFdiffusion 订书肽流水线）
+    # 已拆分到 stapep.rfdiffusion_denovo，此处直接转发。
+    from stapep.rfdiffusion_denovo import main
 
-    method = 'denovo'
-    root_folder = '2KOY/2KOY_100_4'
-    for i in range(53, 54):
-        rfdiffusion_template = f'2koy_{i}'
-        root_path = f'/home/d3008/Documents/{root_folder}/{rfdiffusion_template}'
-        if method == 'modeller':
-            # ------------------Random insert S5 and Modeller ---------------------
-            if not os.path.exists(root_path):
-                os.makedirs(root_path)
-            pdb_path = rf'/home/d3008/Documents/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb'
-            random_insert_stapep_peptide(root_path, pdb_path)
-        elif method == 'denovo':
-            # ------------------ Denovo generate structure ---------------------
-            if rfdiffusion_template.startswith("1gng"):
-                same_threshold = 4  # for 1gng the threshold=4
-                res_threshold = 14  # for 1gng the threshold=14
-            else:
-                same_threshold = 4  # for 2gv2 the threshold=3
-                res_threshold = 6  # for 2gv2 the threshold=6
-
-            fa_file_path = os.path.join(root_path, 'fa')
-            de_novo_folder_path = os.path.join(root_path, 'denovo')
-            if not os.path.exists(de_novo_folder_path):
-                os.makedirs(de_novo_folder_path)
-
-            folder_name, index_list, seq_list = parse_fa_files(fa_file_path, same_threshold, res_threshold, rfdiffusion_template)
-            for i in range(len(seq_list)):
-                seq = seq_list[i]
-                index = index_list[i]
-                st = Structure(verbose=True, save_tmp_dir=False)  # 溶剂类别、是否保存临时目录、是否采用详细日志
-                de_novo_path = f"{de_novo_folder_path}/{index}.pdb"
-                if os.path.exists(de_novo_path):
-                    print(f"skip existing file: {de_novo_path}")
-                    continue
-                print(f"NO file: {de_novo_path}")
-                output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
-                if not output_de_novo:
-                    record = f"Iteration {385} - error"
-                    print(record)
-
-            filenames = sorted(f for f in os.listdir(de_novo_folder_path) if f.endswith(".pdb"))
-            align_filenames = []
-            for filename in filenames:
-                ligand_path = os.path.join(de_novo_folder_path, filename)
-                helix_ratio = calculate_alpha(ligand_path)
-                if helix_ratio > 0.3:
-                    align_filenames.append(filename)
-            protein_path = f"/home/d3008/Documents/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
-            align_denovo_path = os.path.join(root_path, "align_denovo")
-            if not os.path.exists(align_denovo_path):
-                os.makedirs(align_denovo_path)
-            for ligand_name in align_filenames:
-                ligand_path = os.path.join(de_novo_folder_path, ligand_name)
-                ligand_name = os.path.splitext(os.path.basename(ligand_name))[0]
-                align_output_pdb_path = os.path.join(align_denovo_path, f"{ligand_name}.pdb")
-                AlignStructure.align_denovo(ref_pdb=protein_path, pdb=ligand_path, output_pdb=align_output_pdb_path, rfdiffusion_template=rfdiffusion_template)
-        else:
-            print(1)
-
-
-
+    sys.exit(main())

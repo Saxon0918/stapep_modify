@@ -600,3 +600,85 @@ fraction_lysine 0.05263157894736842
 isoelectric_point:  11.999967765808105
 ```
 _Demo: examples/ex4_non_standard_amino_acid.ipynb_
+
+### RFdiffusion Binder Design Pipeline (Command Line)
+----------
+Three command-line workflows implement the RFdiffusion binder design pipeline:
+parse RFdiffusion `.fa` candidates -> build stapled-peptide structures -> generate AlphaFold3 (AF3) inputs.
+
+#### 1. Modeller workflow
+Insert S5 staples into the RFdiffusion backbone and model the stapled peptides with Modeller homology modeling.
+
+```bash
+python -m stapep.rfdiffusion_denovo --method modeller \
+    --base-dir /home/d3008/Documents \
+    --root-folder 2KOY/2KOY_100_4 \
+    --template-prefix 2koy \
+    --start 53 --end 60
+```
+
+Outputs per template (`{root-folder}/{prefix}_{i}/`):
+- `chain_A.pdb` - chain A extracted from the RFdiffusion backbone
+- `noalign/homology_model_{i}.pdb` - Modeller models of the S5 stapled peptide
+- `align/aligned_homology_model_{i}.pdb` - structures aligned to `chain_A.pdb`
+
+#### 2. Denovo workflow (includes cealign)
+Parse RFdiffusion candidate sequences -> ESMFold de novo modeling + short OpenMM MD -> filter by alpha-helix ratio -> PyMOL align to chain A of the reference protein -> PyMOL cealign second alignment.
+
+```bash
+python -m stapep.rfdiffusion_denovo --method denovo \
+    --base-dir /home/d3008/Documents \
+    --root-folder 2KOY/2KOY_100_4 \
+    --template-prefix 2koy \
+    --start 53 --end 60
+```
+
+Outputs per template (`{root-folder}/{prefix}_{i}/`):
+- `denovo/{name}.pdb` - ESMFold models after MD optimization
+- `align_denovo/{name}.pdb` - helix-filtered structures aligned to the reference protein `{root-folder}/RFdiffusion/{prefix}_{i}.pdb`
+- `cealign_denovo/{name}.pdb` - second-stage cealign results (add `--skip-cealign` to skip this step)
+
+```
+    args (shared by the modeller and denovo workflows):
+        --method: modeling workflow (denovo or modeller) (required)
+        --base-dir: data root directory (required)
+        --root-folder: dataset subdirectory relative to base-dir (required)
+        --template-prefix: template name prefix, template name = prefix_{i} (required)
+        --start: start template index, inclusive (required)
+        --end: end template index, exclusive (required)
+        --same-threshold: maximum consecutive identical residue threshold # default: 4
+        --res-threshold: unique residue type count threshold # default: 6
+        --helix-threshold: minimum alpha-helix ratio to keep a denovo PDB # default: 0.3
+        --skip-cealign: skip the cealign step at the end of the denovo workflow # default: cealign runs
+```
+
+#### 3. AlphaFold3 input workflow
+Replace stapled residues (PS5/S5) in the `cealign_denovo` structures with GLY surrogate residues (backbone atoms only), and output surrogate PDB + mmCIF + meta JSON + `sequences.csv` for AF3 batch runs.
+
+```bash
+python -m stapep.batch_build_surrogate_seq \
+    --base-dir /home/d3008/Documents \
+    --base-folder 2KOY \
+    --protein-name 2koy
+```
+
+```
+    args:
+        --base-dir: data root directory # default: /home/d3008/Documents
+        --base-folder: dataset folder name (e.g. 2KOY) # default: 2KOY
+        --protein-name: protein template prefix (e.g. 2koy) # default: 2koy
+        --source-root: source directory # default: base-dir/base-folder/base-folder_100_4
+        --target-root: output directory # default: source directory + '_cif'
+        --protein-pdb: fixed protein structure PDB # default: source-root/RFdiffusion/{protein-name}_0.pdb
+        --protein-chain: chain ID in the protein PDB # default: B
+        --stapled-resnames: stapled residue names (comma-separated) replaced by the surrogate residue # default: PS5,S5
+        --surrogate-resname: surrogate residue name # default: GLY
+        --revision-date: revision_date written into the CIF (AF3 compatible) # default: 2024-01-01
+```
+
+Outputs:
+- `{target-root}/{prefix}_{i}/cealign_denovo/{name}_surrogate.pdb` / `{name}_surrogate.cif` / `{name}_surrogate_meta.json`
+- `{target-root}/surrogate_manifest.csv` - conversion manifest
+- `{target-root}/sequences.csv` - sequences file for AF3 batch runs
+
+Note: `python -m stapep.structure` is kept as a legacy entry point and forwards to `stapep.rfdiffusion_denovo`.

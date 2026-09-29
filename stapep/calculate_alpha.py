@@ -1,7 +1,6 @@
 import os
-import sys
 
-from Bio.PDB import PDBParser, PDBIO, Superimposer
+from Bio.PDB import PDBParser
 from Bio.PDB import DSSP
 from Bio.PDB.Polypeptide import is_aa
 from Bio.PDB.PDBExceptions import PDBConstructionException

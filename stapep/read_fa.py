@@ -1,12 +1,35 @@
 import os
-import csv
 import re
 
-def parse_fa_files(folder_path, same_threshold, res_threshold, rfdiffusion_template):
-    result = []
+
+# =========================
+# 靶点筛选规则配置
+# =========================
+
+# 各靶点对生成序列的氨基酸硬性要求
+# mode: "ALL" 表示必须全部包含, "ANY" 表示至少包含一个
+TEMPLATE_RESIDUE_RULES = {
+    "2gv2": ({"F", "W", "L"}, "ALL"),
+    "pdl1": ({"F", "W"}, "ALL"),
+    "clpp": ({"F", "W", "Y"}, "ANY"),
+    "sting": ({"Y"}, "ALL"),
+}
+
+# 1gng 靶点对 G 数量的特殊限制
+MAX_G_COUNT_1GNG = 3
+# 其它靶点要求 G 占比低于 1/4
+MAX_G_RATIO = 1 / 4
+
+
+def parse_fa_files(folder_path, same_threshold, res_threshold, rfdiffusion_template,
+                   template_prefix):
+    """解析 RFdiffusion 输出的 .fa 文件并筛选候选序列。
+
+    template_prefix: 模板名前缀（对应 CLI 的 --template-prefix），
+                     用于把 .fa 文件名中的 "{prefix}_B" 替换为实际模板名。
+    """
     names = []
     seqs = []
-    global_scores = []
     folder_name = os.path.basename(os.path.normpath(folder_path))
     file_path = f"{folder_path}/epoch1000_step1000/seqs"
     filenames = sorted(f for f in os.listdir(file_path) if f.endswith(".fa"))
@@ -26,47 +49,36 @@ def parse_fa_files(folder_path, same_threshold, res_threshold, rfdiffusion_templ
             sample_match = re.search(r'sample=(\d+)', score_line)
             sample = sample_match.group(1) if sample_match else 'unknown'
 
-            global_score_match = re.search(r'global_score=((?:0|[1-9]\d*)(?:\.\d+)?)', score_line)
-            global_score = float(global_score_match.group(1)) if global_score_match else 0
-
             if reward <= 0:
                 continue
 
             tokens = re.findall(r'[SR]\d+|[A-Z]', seq_line)
 
-            # for 2gv2 check F, W, L is in sequence or not
-            required_2gv2 = {"F", "W", "L"}
-            if not required_2gv2.issubset(tokens) and rfdiffusion_template.startswith("2gv2"):
-                continue
+            # 各靶点要求的氨基酸组成检查
+            residues_required, mode = _match_required_residues(rfdiffusion_template)
+            if residues_required is not None:
+                if mode == "ALL" and not residues_required.issubset(tokens):
+                    continue
+                if mode == "ANY" and residues_required.isdisjoint(tokens):
+                    continue
 
-            required_pdl1 = {"F", "W"}
-            if not required_pdl1.issubset(tokens) and rfdiffusion_template.startswith("pdl1"):
+            # G 数量检查: 1gng 最多 3 个 G; 所有靶点 G 占比需低于 1/4
+            g_token_count = tokens.count('G')
+            if g_token_count >= len(tokens) * MAX_G_RATIO:
                 continue
-
-            required_clpp = {"F", "W", "Y"}
-            if required_clpp.isdisjoint(tokens) and rfdiffusion_template.startswith("clpp"):
-                continue
-
-            required_sting = {"Y"}
-            if not required_sting.issubset(tokens) and rfdiffusion_template.startswith("sting"):
-                continue
-
-            # check G number, for 1gng must minimize than 1/4 of whole list, for 2gv2 must minimize than 1/3 of whole list
-            G_token_count = tokens.count('G')
-            if G_token_count >= 3 and rfdiffusion_template.startswith("1gng"):
-                continue
-            elif G_token_count >= len(tokens)/4:
+            if rfdiffusion_template.startswith("1gng") and g_token_count >= MAX_G_COUNT_1GNG:
                 continue
 
             # check S5 gap
-            S5_flag = detect_S5_distance(tokens, filepath)
+            S5_flag = detect_S5_distance(tokens)
             if not S5_flag:
                 continue
 
+            # 连续相同残基不能超过 same_threshold
             count = 1
             repeat_flag = False
-            for i in range(1,len(tokens)):
-                if tokens[i] == tokens[i-1]:
+            for j in range(1, len(tokens)):
+                if tokens[j] == tokens[j-1]:
                     count += 1
                     if count >= same_threshold:  # same residues sequence length threshold
                         repeat_flag = True
@@ -90,94 +102,54 @@ def parse_fa_files(folder_path, same_threshold, res_threshold, rfdiffusion_templ
 
             if len(unique_aas) >= final_res_threshold:  # residues classes threshold
                 name = f"{os.path.splitext(filename)[0]}_{sample}"
-                if rfdiffusion_template.startswith("1gng"):
-                    name = name.replace("1gng_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("2gv2"):
-                    name = name.replace("2gv2_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("pdl1"):
-                    name = name.replace("pdl1_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("clpp"):
-                    name = name.replace("clpp_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("sting"):
-                    name = name.replace("sting_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("ipad"):
-                    name = name.replace("ipad_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("1ou8"):
-                    name = name.replace("1ou8_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("7aa4"):
-                    name = name.replace("7aa4_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("8e4a"):
-                    name = name.replace("8e4a_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("6ih0"):
-                    name = name.replace("6ih0_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("9co2"):
-                    name = name.replace("9co2_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("mbd5"):
-                    name = name.replace("mbd5_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("2koy"):
-                    name = name.replace("2koy_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("1ox9"):
-                    name = name.replace("1ox9_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("2pv2"):
-                    name = name.replace("2pv2_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("1t2w"):
-                    name = name.replace("1t2w_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("4tky"):
-                    name = name.replace("4tky_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("1bs6"):
-                    name = name.replace("1bs6_B", rfdiffusion_template)
-                elif rfdiffusion_template.startswith("4e81"):
-                    name = name.replace("4e81_B", rfdiffusion_template)
+                name = replace_template_name(name, rfdiffusion_template, template_prefix)
                 names.append(name)
                 seqs.append(seq_line)
-                global_scores.append(global_score)
-                result.append([name, seq_line])
-    names, seqs, global_scores = remove_duplicate_seqs(names, seqs, global_scores)
 
-    # output_csv = "/home/d3008/Documents/1BS6/1BS6_Sequence_score.csv"
-    # assert len(names) == len(global_scores) == len(seqs), (
-    #     f"Length mismatch: "
-    #     f"names={len(names)}, "
-    #     f"global_scores={len(global_scores)}, "
-    #     f"seqs={len(seqs)}"
-    # )
-    # file_exists = os.path.exists(output_csv)
-    # with open(output_csv, mode="a", newline="", encoding="utf-8") as f:
-    #     writer = csv.writer(f)
-    #     if not file_exists:
-    #         writer.writerow(["name", "global_score", "sequence"])
-    #     for name, score, seq in zip(names, global_scores, seqs):
-    #         writer.writerow([name, score, seq])
+    names, seqs = remove_duplicate_seqs(names, seqs)
 
     return folder_name, names, seqs
 
 
-def remove_duplicate_seqs(names, seqs, global_scores):
+def _match_required_residues(rfdiffusion_template):
+    """返回 (required_residues, mode); 若模板不在配置中则返回 (None, None)"""
+    for prefix, (residues, mode) in TEMPLATE_RESIDUE_RULES.items():
+        if rfdiffusion_template.startswith(prefix):
+            return residues, mode
+    return None, None
+
+
+def replace_template_name(name, rfdiffusion_template, template_prefix):
+    """把 name 中的 "{template_prefix}_B" 替换为实际模板名 rfdiffusion_template。"""
+    if rfdiffusion_template.startswith(template_prefix):
+        name = name.replace(f"{template_prefix}_B", rfdiffusion_template)
+    return name
+
+
+def remove_duplicate_seqs(names, seqs):
     seen = set()
     unique_seqs = []
     unique_names = []
-    unique_global_scores = []
 
-    for seq, name, global_score in zip(seqs, names, global_scores):
+    for seq, name in zip(seqs, names):
         if seq not in seen:
             seen.add(seq)
             unique_seqs.append(seq)
             unique_names.append(name)
-            unique_global_scores.append(global_score)
 
-    return unique_names, unique_seqs, unique_global_scores
+    return unique_names, unique_seqs
 
 
-def detect_S5_distance(tokens, filepath):
+def detect_S5_distance(tokens):
     tokens_stapled = [i for i in tokens if re.search(r'\d', i)]
     if not all(i == 'S5' for i in tokens_stapled):
         return True
     S5_index = [i for i, token in enumerate(tokens) if token == "S5"]
+    if len(S5_index) % 2 != 0:
+        return False
     S5_flag = True
     for i in range(0, len(S5_index), 2):
         if S5_index[i + 1] - S5_index[i] != 4:
             S5_flag = False
             break
     return S5_flag
-
-

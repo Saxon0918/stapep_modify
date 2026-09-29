@@ -1,41 +1,43 @@
-import os
+"""批量构建 surrogate 序列结构（为 AF3 准备输入），由原 batch_build_surrogate_seq.py 整理而来。
+
+把 cealign_denovo 中的订书肽（PS5/S5）替换为代理残基 GLY（仅保留主链原子），
+输出 surrogate PDB + mmCIF + meta JSON，并生成 AF3 批量运行所需的 sequences.csv。
+
+用法示例：
+    python -m stapep.batch_build_surrogate_seq --base-folder 2KOY --protein-name 2koy
+
+    # 完全自定义路径：
+    python -m stapep.batch_build_surrogate_seq \
+        --source-root /data/2KOY/2KOY_100_4 \
+        --target-root /data/2KOY/2KOY_100_4_cif \
+        --protein-pdb /data/2KOY/2KOY_100_4/RFdiffusion/2koy_0.pdb \
+        --protein-chain B
+"""
+import argparse
 import csv
 import json
+import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from Bio.PDB import PDBParser
 from Bio.PDB import MMCIFIO
 from Bio.SeqUtils import seq1
 
-
 # =========================
-# 路径配置
+# 默认路径配置（与旧实现一致）
 # =========================
-BASE_FOLDER = "2KOY"
-BASE_PROTEINNAME = "2koy"
-SOURCE_ROOT = Path(f"/home/d3008/Documents/{BASE_FOLDER}/{BASE_FOLDER}_100_4")
-TARGET_ROOT = Path(f"/home/d3008/Documents/{BASE_FOLDER}/{BASE_FOLDER}_100_4_cif")
-
-# 固定的 protein 结构文件
-PROTEIN_PDB = f"/home/d3008/Documents/{BASE_FOLDER}/{BASE_FOLDER}_100_4/RFdiffusion/{BASE_PROTEINNAME}_0.pdb"
-PROTEIN_CHAIN_ID = "B"
-
-# # =========================
-# # 路径配置
-# # =========================
-# BASE_FOLDER = "MDM2"
-# BASE_PROTEINNAME = "mdm2"
-# SOURCE_ROOT = Path(f"/home/d3008/Documents/MDM2/MDM2_after_sample/mdm2_0")
-# TARGET_ROOT = Path(f"/home/d3008/Documents/MDM2/MDM2_after_sample_cif/mdm2_0")
-#
-# # 固定的 protein 结构文件
-# PROTEIN_PDB = f"/home/d3008/Documents/MDM2/MDM2_after_sample/mdm2_0/mdm2_0_complex.pdb"
-# PROTEIN_CHAIN_ID = "B"
+DEFAULT_BASE_DIR = "/home/d3008/Documents"
+DEFAULT_BASE_FOLDER = "2KOY"
+DEFAULT_PROTEIN_NAME = "2koy"
+SOURCE_FOLDER_SUFFIX = "_100_4"
+TARGET_FOLDER_SUFFIX = "_100_4_cif"
+DEFAULT_REVISION_DATE = "2024-01-01"
+DEFAULT_PROTEIN_CHAIN_ID = "B"
 
 # 当前方案：PS5 -> GLY
-STAPLED_RESNAMES = {"PS5", "S5"}
-SURROGATE_RESNAME = "GLY"
+DEFAULT_STAPLED_RESNAMES = {"PS5", "S5"}
+DEFAULT_SURROGATE_RESNAME = "GLY"
 
 STANDARD_3TO1 = {
     "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
@@ -44,9 +46,23 @@ STANDARD_3TO1 = {
     "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
 }
 
+# 代理残基只保留这些主链原子
 SURROGATE_ALLOWED_ATOMS = {
     "GLY": {"N", "CA", "C", "O", "OXT"},
 }
+
+# manifest 记录字段
+MANIFEST_FIELDS = [
+    "source_pdb",
+    "surrogate_pdb",
+    "surrogate_cif",
+    "meta_json",
+    "status",
+    "message",
+    "length",
+    "sequence",
+    "converted_stapled_count",
+]
 
 
 # =========================
@@ -62,9 +78,9 @@ def is_hydrogen(atom) -> bool:
     return element == "H" or name.startswith("H")
 
 
-def is_supported_residue(residue) -> bool:
+def is_supported_residue(residue, stapled_resnames) -> bool:
     resname = clean_resname(residue.get_resname())
-    return (resname in STANDARD_3TO1) or (resname in STAPLED_RESNAMES)
+    return (resname in STANDARD_3TO1) or (resname in stapled_resnames)
 
 
 def get_first_chain(structure):
@@ -104,6 +120,14 @@ def pdb_atom_line(
         f"{occupancy:>6.2f}{bfactor:>6.2f}"
         f"          {element:>2}\n"
     )
+
+
+def _manifest_row(source_pdb: str = "", status: str = "skip", message: str = "") -> Dict:
+    row = {field: "" for field in MANIFEST_FIELDS}
+    row["source_pdb"] = source_pdb
+    row["status"] = status
+    row["message"] = message
+    return row
 
 
 def extract_protein_sequence_from_pdb(pdb_path: Path, chain_id: str) -> str:
@@ -151,7 +175,7 @@ def extract_protein_sequence_from_pdb(pdb_path: Path, chain_id: str) -> str:
 # =========================
 # surrogate 结构生成
 # =========================
-def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
+def build_surrogate_records(chain, stapled_resnames, surrogate_resname) -> (List[Dict], Dict):
     records = []
     residue_meta = []
     sequence_chars = []
@@ -161,18 +185,18 @@ def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
     stapled_count = 0
 
     for residue in chain:
-        if not is_supported_residue(residue):
+        if not is_supported_residue(residue, stapled_resnames):
             continue
 
         original_resname = clean_resname(residue.get_resname())
-        is_stapled = original_resname in STAPLED_RESNAMES
+        is_stapled = original_resname in stapled_resnames
 
         if is_stapled:
-            surrogate_resname = SURROGATE_RESNAME
-            allowed_atoms = SURROGATE_ALLOWED_ATOMS[SURROGATE_RESNAME]
+            surrogate_resname_for_res = surrogate_resname
+            allowed_atoms = SURROGATE_ALLOWED_ATOMS[surrogate_resname]
             stapled_count += 1
         else:
-            surrogate_resname = original_resname
+            surrogate_resname_for_res = original_resname
             allowed_atoms = None
 
         residue_atoms = []
@@ -199,7 +223,7 @@ def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
             residue_atoms.append({
                 "serial": atom_serial,
                 "atom_name": atom_name,
-                "resname": surrogate_resname,
+                "resname": surrogate_resname_for_res,
                 "chain_id": "A",
                 "resseq": new_resseq,
                 "x": float(coord[0]),
@@ -216,7 +240,7 @@ def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
             continue
 
         records.extend(residue_atoms)
-        sequence_chars.append(STANDARD_3TO1[surrogate_resname])
+        sequence_chars.append(STANDARD_3TO1[surrogate_resname_for_res])
 
         hetflag, orig_resseq, orig_icode = residue.id
         residue_meta.append({
@@ -227,7 +251,7 @@ def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
             "source_resseq": int(orig_resseq),
             "source_icode": str(orig_icode).strip(),
             "source_resname": original_resname,
-            "surrogate_resname": surrogate_resname,
+            "surrogate_resname": surrogate_resname_for_res,
             "is_stapled_source": is_stapled,
         })
 
@@ -236,8 +260,8 @@ def build_surrogate_records(chain) -> Tuple[List[Dict], Dict]:
     meta = {
         "source_chain_id": str(chain.id).strip(),
         "surrogate_chain_id": "A",
-        "surrogate_resname_for_stapled": SURROGATE_RESNAME,
-        "stapled_source_resnames": sorted(list(STAPLED_RESNAMES)),
+        "surrogate_resname_for_stapled": surrogate_resname,
+        "stapled_source_resnames": sorted(list(stapled_resnames)),
         "sequence": "".join(sequence_chars),
         "length": len(sequence_chars),
         "n_stapled_positions_converted": stapled_count,
@@ -269,7 +293,7 @@ def write_surrogate_pdb(records: List[Dict], out_pdb: Path):
         f.write("TER\nEND\n")
 
 
-def ensure_release_date_in_cif(cif_path: Path, revision_date: str = "2024-01-01"):
+def ensure_release_date_in_cif(cif_path: Path, revision_date: str = DEFAULT_REVISION_DATE):
     content = cif_path.read_text(encoding="utf-8")
     if "_pdbx_audit_revision_history.revision_date" in content:
         return
@@ -285,7 +309,7 @@ def ensure_release_date_in_cif(cif_path: Path, revision_date: str = "2024-01-01"
         f.write(f"1 'Structure model' 1 0 {revision_date}\n")
 
 
-def convert_pdb_to_cif(pdb_path: Path, cif_path: Path):
+def convert_pdb_to_cif(pdb_path: Path, cif_path: Path, revision_date: str = DEFAULT_REVISION_DATE):
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure("surrogate", str(pdb_path))
 
@@ -293,21 +317,13 @@ def convert_pdb_to_cif(pdb_path: Path, cif_path: Path):
     io.set_structure(structure)
     io.save(str(cif_path))
 
-    ensure_release_date_in_cif(cif_path, revision_date="2024-01-01")
+    ensure_release_date_in_cif(cif_path, revision_date=revision_date)
 
 
-def process_single_pdb(src_pdb: Path, dst_dir: Path) -> Dict:
-    result = {
-        "source_pdb": str(src_pdb),
-        "surrogate_pdb": "",
-        "surrogate_cif": "",
-        "meta_json": "",
-        "status": "error",
-        "message": "",
-        "length": 0,
-        "sequence": "",
-        "converted_stapled_count": 0,
-    }
+def process_single_pdb(src_pdb: Path, dst_dir: Path,
+                       stapled_resnames, surrogate_resname,
+                       revision_date: str = DEFAULT_REVISION_DATE) -> Dict:
+    result = _manifest_row(source_pdb=str(src_pdb), status="error")
 
     try:
         parser = PDBParser(QUIET=True)
@@ -321,7 +337,7 @@ def process_single_pdb(src_pdb: Path, dst_dir: Path) -> Dict:
         result["message"] = "未找到链。"
         return result
 
-    records, meta = build_surrogate_records(chain)
+    records, meta = build_surrogate_records(chain, stapled_resnames, surrogate_resname)
     if not records or meta["length"] == 0:
         result["message"] = "未生成有效 surrogate 结构。"
         return result
@@ -333,7 +349,7 @@ def process_single_pdb(src_pdb: Path, dst_dir: Path) -> Dict:
 
     try:
         write_surrogate_pdb(records, out_pdb)
-        convert_pdb_to_cif(out_pdb, out_cif)
+        convert_pdb_to_cif(out_pdb, out_cif, revision_date=revision_date)
 
         with open(out_meta, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -407,88 +423,58 @@ def write_sequences_csv(
 # =========================
 # 主流程
 # =========================
-def main():
-    TARGET_ROOT.mkdir(parents=True, exist_ok=True)
+def run_batch(source_root: Path, target_root: Path, protein_pdb: Path,
+              protein_chain_id: str, base_protein_name: str,
+              stapled_resnames, surrogate_resname, revision_date: str) -> None:
+    target_root.mkdir(parents=True, exist_ok=True)
 
     manifest_rows = []
 
-    if not SOURCE_ROOT.exists():
-        raise FileNotFoundError(f"源目录不存在: {SOURCE_ROOT}")
+    if not source_root.exists():
+        raise FileNotFoundError(f"源目录不存在: {source_root}")
 
-    protein_sequence = extract_protein_sequence_from_pdb(
-        Path(PROTEIN_PDB),
-        PROTEIN_CHAIN_ID,
-    )
-    print(f"[INFO] Protein sequence length ({PROTEIN_CHAIN_ID} chain): {len(protein_sequence)}")
+    protein_sequence = extract_protein_sequence_from_pdb(protein_pdb, protein_chain_id)
+    print(f"[INFO] Protein sequence length ({protein_chain_id} chain): {len(protein_sequence)}")
 
-    mdm2_dirs = sorted([
-        p for p in SOURCE_ROOT.iterdir()
-        if p.is_dir() and p.name.startswith(f"{BASE_PROTEINNAME}_")
+    template_dirs = sorted([
+        p for p in source_root.iterdir()
+        if p.is_dir() and p.name.startswith(f"{base_protein_name}_")
     ])
 
-    # mdm2_dirs = [1]
-    for mdm2_dir in mdm2_dirs:
-        src_cealign = mdm2_dir / "cealign_denovo"
-        # src_cealign = Path("/home/d3008/Documents/MDM2/MDM2_after_sample/mdm2_0/cealign_denovo")
-        dst_cealign = TARGET_ROOT / mdm2_dir.name / "cealign_denovo"
-        # dst_cealign = Path("/home/d3008/Documents/MDM2/MDM2_after_sample_cif/mdm2_0/cealign_denovo")
+    for template_dir in template_dirs:
+        src_cealign = template_dir / "cealign_denovo"
+        dst_cealign = target_root / template_dir.name / "cealign_denovo"
         dst_cealign.mkdir(parents=True, exist_ok=True)
 
         if not src_cealign.exists():
-            manifest_rows.append({
-                "source_pdb": "",
-                "surrogate_pdb": "",
-                "surrogate_cif": "",
-                "meta_json": "",
-                "status": "skip",
-                "message": f"{src_cealign} 不存在",
-                "length": 0,
-                "sequence": "",
-                "converted_stapled_count": 0,
-            })
+            manifest_rows.append(
+                _manifest_row(message=f"{src_cealign} 不存在")
+            )
             continue
 
         pdb_files = sorted(src_cealign.glob("*.pdb"))
         if len(pdb_files) == 0:
-            manifest_rows.append({
-                "source_pdb": "",
-                "surrogate_pdb": "",
-                "surrogate_cif": "",
-                "meta_json": "",
-                "status": "empty",
-                "message": f"{src_cealign} 为空",
-                "length": 0,
-                "sequence": "",
-                "converted_stapled_count": 0,
-            })
+            manifest_rows.append(
+                _manifest_row(status="empty", message=f"{src_cealign} 为空")
+            )
             continue
 
         for pdb_file in pdb_files:
-            row = process_single_pdb(pdb_file, dst_cealign)
+            row = process_single_pdb(pdb_file, dst_cealign,
+                                     stapled_resnames, surrogate_resname,
+                                     revision_date=revision_date)
             manifest_rows.append(row)
             print(f"[{row['status']}] {pdb_file}")
 
-    manifest_path = TARGET_ROOT / "surrogate_manifest.csv"
-    fieldnames = [
-        "source_pdb",
-        "surrogate_pdb",
-        "surrogate_cif",
-        "meta_json",
-        "status",
-        "message",
-        "length",
-        "sequence",
-        "converted_stapled_count",
-    ]
-
+    manifest_path = target_root / "surrogate_manifest.csv"
     with open(manifest_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDS)
         writer.writeheader()
         writer.writerows(manifest_rows)
 
     print(f"\nDone. Manifest saved to: {manifest_path}")
 
-    sequences_csv_path = TARGET_ROOT / "sequences.csv"
+    sequences_csv_path = target_root / "sequences.csv"
     write_sequences_csv(
         output_csv=sequences_csv_path,
         manifest_rows=manifest_rows,
@@ -497,6 +483,50 @@ def main():
     print(f"Sequences CSV saved to: {sequences_csv_path}")
 
 
-if __name__ == "__main__":
-    main()
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="把订书肽替换为 GLY 代理残基，生成 AF3 输入（PDB/CIF/meta/sequences.csv）",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--base-dir", default=DEFAULT_BASE_DIR, help="数据根目录")
+    parser.add_argument("--base-folder", default=DEFAULT_BASE_FOLDER, help="数据集文件夹名（如 2KOY）")
+    parser.add_argument("--protein-name", default=DEFAULT_PROTEIN_NAME, help="蛋白模板名前缀（如 2koy）")
+    parser.add_argument("--source-root", default=None,
+                        help="源目录；默认 = base-dir/base-folder/base-folder_100_4")
+    parser.add_argument("--target-root", default=None,
+                        help="输出目录；默认 = 源目录 + '_cif'")
+    parser.add_argument("--protein-pdb", default=None,
+                        help="固定蛋白结构 PDB；默认 = source-root/RFdiffusion/{protein-name}_0.pdb")
+    parser.add_argument("--protein-chain", default=DEFAULT_PROTEIN_CHAIN_ID, help="蛋白 PDB 中的链 ID")
+    parser.add_argument("--stapled-resnames", default=",".join(sorted(DEFAULT_STAPLED_RESNAMES)),
+                        help="订书残基名（逗号分隔，将被替换为代理残基）")
+    parser.add_argument("--surrogate-resname", default=DEFAULT_SURROGATE_RESNAME, help="代理残基名")
+    parser.add_argument("--revision-date", default=DEFAULT_REVISION_DATE,
+                        help="写入 CIF 的 revision_date（AF3 兼容）")
+    args = parser.parse_args(argv)
 
+    source_root = (Path(args.source_root) if args.source_root
+                   else Path(args.base_dir) / args.base_folder / f"{args.base_folder}{SOURCE_FOLDER_SUFFIX}")
+    target_root = (Path(args.target_root) if args.target_root
+                   else Path(args.base_dir) / args.base_folder / f"{args.base_folder}{TARGET_FOLDER_SUFFIX}")
+    protein_pdb = (Path(args.protein_pdb) if args.protein_pdb
+                   else source_root / "RFdiffusion" / f"{args.protein_name}_0.pdb")
+    stapled_resnames = {name.strip().upper() for name in args.stapled_resnames.split(",") if name.strip()}
+    surrogate_resname = args.surrogate_resname.strip().upper()
+
+    if surrogate_resname not in SURROGATE_ALLOWED_ATOMS:
+        raise ValueError(f"不支持的代理残基 {surrogate_resname}，可选: {list(SURROGATE_ALLOWED_ATOMS)}")
+
+    run_batch(source_root=source_root,
+              target_root=target_root,
+              protein_pdb=protein_pdb,
+              protein_chain_id=args.protein_chain,
+              base_protein_name=args.protein_name,
+              stapled_resnames=stapled_resnames,
+              surrogate_resname=surrogate_resname,
+              revision_date=args.revision_date)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
