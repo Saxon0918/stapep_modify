@@ -28,22 +28,22 @@ def cealign_proteins(protein_path, ligand_path, align_output_pdb_path):
 
 # 示例调用（请修改为你自己的路径）
 if __name__ == "__main__":
-    root_folder = 'STING/STING_100_1'
-    for i in range(100):
-        rfdiffusion_template = f'sting_{i}'
-        align_output_folder = f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/cealign_denovo'
+    root_folder = '2KOY/2KOY_100_4'
+    for i in range(53, 100):
+        rfdiffusion_template = f'2koy_{i}'
+        align_output_folder = f'/home/d3008/Documents/{root_folder}/{rfdiffusion_template}/cealign_denovo'
         if not os.path.exists(align_output_folder):
             os.makedirs(align_output_folder)
 
-        root_path = f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/denovo'
+        root_path = f'/home/d3008/Documents/{root_folder}/{rfdiffusion_template}/align_denovo'
         # 遍历 test 文件夹下所有 .pdb 文件
         for filename in os.listdir(root_path):
             if filename.endswith(".pdb"):
                 try:
                     ligand_path = os.path.join(root_path, filename)
                     name = os.path.splitext(filename)[0]
-                    rfdiffusion_name = "_".join(name.split("_")[:2])
-                    protein_path = f'/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_name}.pdb'
+                    # rfdiffusion_name = "_".join(name.split("_")[:2])
+                    protein_path = f'/home/d3008/Documents/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb'
                     align_output_pdb_path = f'{align_output_folder}/{filename}'
                     cealign_proteins(protein_path, ligand_path, align_output_pdb_path)
                 except Exception as e:

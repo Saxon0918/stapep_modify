@@ -112,13 +112,29 @@ def parse_fa_files(folder_path, same_threshold, res_threshold, rfdiffusion_templ
                     name = name.replace("6ih0_B", rfdiffusion_template)
                 elif rfdiffusion_template.startswith("9co2"):
                     name = name.replace("9co2_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("mbd5"):
+                    name = name.replace("mbd5_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("2koy"):
+                    name = name.replace("2koy_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("1ox9"):
+                    name = name.replace("1ox9_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("2pv2"):
+                    name = name.replace("2pv2_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("1t2w"):
+                    name = name.replace("1t2w_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("4tky"):
+                    name = name.replace("4tky_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("1bs6"):
+                    name = name.replace("1bs6_B", rfdiffusion_template)
+                elif rfdiffusion_template.startswith("4e81"):
+                    name = name.replace("4e81_B", rfdiffusion_template)
                 names.append(name)
                 seqs.append(seq_line)
                 global_scores.append(global_score)
                 result.append([name, seq_line])
     names, seqs, global_scores = remove_duplicate_seqs(names, seqs, global_scores)
 
-    # output_csv = "/home/d3008/Documents/zhr/9CO2/global_scores_result.csv"
+    # output_csv = "/home/d3008/Documents/1BS6/1BS6_Sequence_score.csv"
     # assert len(names) == len(global_scores) == len(seqs), (
     #     f"Length mismatch: "
     #     f"names={len(names)}, "

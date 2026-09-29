@@ -2,8 +2,8 @@ import os
 from pymol import cmd
 
 # 设置输入输出目录
-pdb_folder = "/home/d3008/Documents/zhr/1OU8/1OU8_100_1/RFdiffusion1/"
-output_folder = "/home/d3008/Documents/zhr/1OU8/1OU8_100_1/RFdiffusion/"
+pdb_folder = "/home/d3008/Documents/1OU8/1OU8_100_1/RFdiffusion1/"
+output_folder = "/home/d3008/Documents/1OU8/1OU8_100_1/RFdiffusion/"
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 

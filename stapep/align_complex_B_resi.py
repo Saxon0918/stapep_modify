@@ -75,9 +75,9 @@ def replace_mol_residues(equil_path, complex_path, output_path):
 
 
 if __name__ == '__main__':
-    base_dir = "/home/d3008/Documents/zhr/STING/STING_100_1"
-    for i in range(60):
-        folder_name = f"sting_{i}"
+    base_dir = "/home/d3008/Documents/CLPP/CLPP_100_2"
+    for i in range(70,100):
+        folder_name = f"clpp_{i}"
         source_folder = os.path.join(base_dir, folder_name)
         cealign_folder = os.path.join(source_folder, "cealign_denovo")
         if os.path.isdir(cealign_folder) and os.listdir(cealign_folder):

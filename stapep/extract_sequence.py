@@ -28,7 +28,7 @@ def extract_sequence_from_pdb(pdb_path):
 
 
 # 设置根目录路径和CSV文件路径
-root_dir = '/home/d3008/Documents/zhr/gsk3beta/'  # 或者是你的实际根目录路径
+root_dir = '/home/d3008/Documents/gsk3beta/'  # 或者是你的实际根目录路径
 csv_path = os.path.join(root_dir, 'result_final.csv')
 
 # 读取CSV文件
@@ -51,5 +51,5 @@ for index, row in df.iterrows():
 
 # 更新DataFrame并保存
 df['Sequence'] = sequences
-df.to_csv('/home/d3008/Documents/zhr/gsk3beta/result_final_with_sequences.csv', index=False, sep=',')
+df.to_csv('/home/d3008/Documents/gsk3beta/result_final_with_sequences.csv', index=False, sep=',')
 

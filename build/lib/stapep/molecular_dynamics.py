@@ -253,7 +253,8 @@ class PrepareProt(object):
                         else:  # If it's the last retry
                             raise e  # Propagate the error up, so it can be caught and handled outside of this function
         elif method == 'modeller':
-            hm_file = self.homology_modeling(''.join(std_seq_list))  # 建模，返回的是pdb文件的路径
+            # hm_file = self.homology_modeling(''.join(std_seq_list))  # 建模，返回的是pdb文件的路径
+            hm_file = self.template_pdb_file_path  # todo test no modeller
             with open(hm_file, 'r') as f:
                 lines = f.readlines()  # 一个氨基酸有多个原子构成，这个lines就是原肽链里每个氨基酸原子的序列
         else:

@@ -5,7 +5,9 @@ import logging
 import csv
 import gc
 import torch
-
+import numpy as np
+from openmm import OpenMMException, unit
+from openmm.app import PDBFile
 import pandas as pd
 from Bio import AlignIO
 from Bio.PDB import PDBParser, Superimposer, PDBIO, Select
@@ -16,6 +18,9 @@ from Bio import pairwise2
 import Bio.Align.substitution_matrices as matlist
 from collections import defaultdict
 from io import StringIO
+
+from parmed.exceptions import OpenMMError
+
 from read_fa import *
 from calculate_alpha import *
 try:
@@ -92,19 +97,21 @@ class Structure(object):
                   solvent=self.solvent,  # 溶剂类型
                   temperature=300,  # 温度为300K
                   friction=1,  # 摩擦系数控制粒子运动的阻力大小
-                  timestep=2,  # 时间步长为 2 fs（飞秒），分子动力学模拟中每一步的时间间隔
+                  timestep=1,  # 时间步长为 1 fs（飞秒），分子动力学模拟中每一步的时间间隔
                   interval=10,  # 记录间隔为 10 步
                   nsteps=nsteps)  # 模拟步数
         # 是否启动详细日志
         if self.verbose:
             logging.info(f'Running short time simulation for {nsteps} steps')
-
         try:
             sim.minimize()  # 能量最小化
             sim.run()  # 开始运行模拟
             return True
         except ValueError as e:
             logging.error(f"Simulation error: {e}. Skipping this simulation.")
+            return False
+        except OpenMMError as e:
+            logging.error(f"OpenMM error: {e}. Skipping this simulation.")
             return False
 
     def _get_opt_structure(self, seq, pdb):
@@ -173,19 +180,46 @@ class Structure(object):
             Returns:
                 str: The path to the generated PDB file.
         '''
-        spp = SeqPreProcessing(additional_residues=additional_residues)
-        spp.check_seq_validation(seq)
-        pp = PrepareProt(seq, self.tmp_dir, method='alphafold', additional_residues=additional_residues)
-        pp._gen_prmtop_and_inpcrd_file()
-        # self._short_time_simulation()
-        simulation_result = self._short_time_simulation()
-        if not simulation_result:
-            print("Short-time simulation failed. Aborting de novo 3D structure generation.")
-            return False  # 返回 None 表示中止
+        try:
+            spp = SeqPreProcessing(additional_residues=additional_residues)
+            spp.check_seq_validation(seq)
+        except Exception as e:
+            print(f"[ERROR] Sequence validation failed for seq={seq}: {e}")
+            return False
 
-        self._get_opt_structure(seq, output_pdb)
-        if not self.save_tmp_dir:
-            self._del_tmp_dir()
+        try:
+            pp = PrepareProt(
+                seq,
+                self.tmp_dir,
+                method='alphafold',
+                additional_residues=additional_residues
+            )
+            pp._gen_prmtop_and_inpcrd_file()
+        except Exception as e:
+            print(f"[ERROR] Failed to prepare topology/coordinate files for seq={seq}: {e}")
+            return False
+
+        try:
+            simulation_result = self._short_time_simulation()
+            if not simulation_result:
+                print(f"[ERROR] Short-time simulation failed for seq={seq}")
+                return False
+        except Exception as e:
+            print(f"[ERROR] Exception during short-time simulation for seq={seq}: {e}")
+            return False
+
+        try:
+            self._get_opt_structure(seq, output_pdb)
+        except Exception as e:
+            print(f"[ERROR] Failed to generate optimized structure for seq={seq}, output={output_pdb}: {e}")
+            return False
+
+        try:
+            if not self.save_tmp_dir:
+                self._del_tmp_dir()
+        except Exception as e:
+            print(f"[WARNING] Failed to delete tmp dir for seq={seq}: {e}")
+
         return output_pdb
 
     def generate_3d_structure_from_sequence(self,
@@ -636,15 +670,15 @@ if __name__ == '__main__':
     # 5. 动力学优化（Dynamics Optimization）：使用 OpenMM 工具对模型进行分子动力学（MD）模拟。模拟短时间（如100皮秒，ps）的动力学行为，优化模型的稳定性和精确度。
 
     method = 'denovo'
-    root_folder = 'IPAD/IPAD_100_1'
-    for i in range(13, 100):
-        rfdiffusion_template = f'ipad_{i}'
-        root_path = f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}'
+    root_folder = '2KOY/2KOY_100_4'
+    for i in range(53, 54):
+        rfdiffusion_template = f'2koy_{i}'
+        root_path = f'/home/d3008/Documents/{root_folder}/{rfdiffusion_template}'
         if method == 'modeller':
             # ------------------Random insert S5 and Modeller ---------------------
             if not os.path.exists(root_path):
                 os.makedirs(root_path)
-            pdb_path = rf'/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb'
+            pdb_path = rf'/home/d3008/Documents/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb'
             random_insert_stapep_peptide(root_path, pdb_path)
         elif method == 'denovo':
             # ------------------ Denovo generate structure ---------------------
@@ -664,27 +698,25 @@ if __name__ == '__main__':
             for i in range(len(seq_list)):
                 seq = seq_list[i]
                 index = index_list[i]
-                st = Structure(verbose=True, save_tmp_dir=True)  # 溶剂类别、是否保存临时目录、是否采用详细日志
+                st = Structure(verbose=True, save_tmp_dir=False)  # 溶剂类别、是否保存临时目录、是否采用详细日志
                 de_novo_path = f"{de_novo_folder_path}/{index}.pdb"
                 if os.path.exists(de_novo_path):
                     print(f"skip existing file: {de_novo_path}")
                     continue
+                print(f"NO file: {de_novo_path}")
                 output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
                 if not output_de_novo:
                     record = f"Iteration {385} - error"
                     print(record)
 
             filenames = sorted(f for f in os.listdir(de_novo_folder_path) if f.endswith(".pdb"))
-            if rfdiffusion_template.startswith("1gng") or rfdiffusion_template.startswith("ipad"):
-                align_filenames = []
-                for filename in filenames:
-                    ligand_path = os.path.join(de_novo_folder_path, filename)
-                    helix_ratio = calculate_alpha(ligand_path)
-                    if helix_ratio > 0.3:
-                        align_filenames.append(filename)
-            else:
-                align_filenames = [fname for fname in os.listdir(f'/home/d3008/Documents/zhr/{root_folder}/{rfdiffusion_template}/denovo') if fname.lower().endswith('.pdb')]
-            protein_path = f"/home/d3008/Documents/zhr/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
+            align_filenames = []
+            for filename in filenames:
+                ligand_path = os.path.join(de_novo_folder_path, filename)
+                helix_ratio = calculate_alpha(ligand_path)
+                if helix_ratio > 0.3:
+                    align_filenames.append(filename)
+            protein_path = f"/home/d3008/Documents/{root_folder}/RFdiffusion/{rfdiffusion_template}.pdb"
             align_denovo_path = os.path.join(root_path, "align_denovo")
             if not os.path.exists(align_denovo_path):
                 os.makedirs(align_denovo_path)
@@ -695,29 +727,6 @@ if __name__ == '__main__':
                 AlignStructure.align_denovo(ref_pdb=protein_path, pdb=ligand_path, output_pdb=align_output_pdb_path, rfdiffusion_template=rfdiffusion_template)
         else:
             print(1)
-
-    # --------------------- Modeller ---------------------
-    # seq = 'Ac-BATP-R8-RRR-Aib-BLBR-R3-FKRLQ'
-    # st = Structure(verbose=True)
-    # st.generate_3d_structure_from_template(seq=seq,
-    #                                        output_pdb='example/data/homology_model.pdb',
-    #                                        template_pdb='example/data/template.pdb')
-    #
-    # AlignStructure.align(ref_pdb='example/data/template.pdb',
-    #                      pdb='example/data/homology_model.pdb',
-    #                      output_pdb='example/data/aligned.pdb')
-
-    # --------------------- Denove ---------------------
-    # seq = 'S5KKIS5KKIKKKLK'
-    # st = Structure(verbose=True, save_tmp_dir=True)
-    # # 去模板预测，采用ESMFold
-    # de_novo_path = f"example/stapep_data/test/pred_stapep_58075.pdb"
-    # output_de_novo = st.de_novo_3d_structure(seq=seq, output_pdb=de_novo_path)
-    # if not output_de_novo:
-    #     record = f"Iteration {385} - error"
-    #     print(record)
-
-    # generate_pdb(st)
 
 
 
